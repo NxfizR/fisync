@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fisync</title>
+<style>
+:root{color-scheme:light dark}
+body{font:16px/1.5 system-ui,sans-serif;max-width:420px;margin:0 auto;padding:24px}
+input,button{font:inherit;width:100%;padding:12px;margin:6px 0;border-radius:10px;border:1px solid #8886;background:transparent;color:inherit}
+button{background:CanvasText;color:Canvas;border:0}
+.hint{opacity:.7;font-size:14px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<h1>fisync</h1>
+<section id="setup">
+  <p>Open fisync on your computer. It shows an address and a PIN.</p>
+  <input id="addr" placeholder="Computer address, e.g. 192.168.1.20" inputmode="decimal" autocomplete="off">
+  <input id="pin" placeholder="6-digit PIN" inputmode="numeric" maxlength="6" autocomplete="off">
+  <button id="go">Connect</button>
+</section>
+<section id="live" hidden>
+  <p id="status"></p>
+  <p class="hint">Keep this app open. While it is connected, your calls, messages and photos can be used from your computer. For the trackpad, open the same address in your browser.</p>
+  <button id="stop">Disconnect</button>
+</section>
+<script>
+const $ = id => document.getElementById(id);
+const Fi = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.FiBridge;
+let ws, host, pin, stopped = false;
+$('addr').value = localStorage.addr || '';
+const out = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+
+async function syncPhotos() {
+  const sent = JSON.parse(localStorage.sent || '[]');
+  const { items } = await Fi.listPhotos({ limit: 30 });
+  for (const p of items.filter(p => !sent.includes(p.id))) {
+    const { data } = await Fi.readPhoto({ id: p.id });
+    out({ t: 'photo', name: p.name, data });
+    sent.push(p.id);
+    localStorage.sent = JSON.stringify(sent.slice(-500));
+  }
+  out({ t: 'photosdone' });
+}
+
+async function run(m) {
+  try {
+    if (m.t === 'dial') await Fi.dial({ number: String(m.n) });
+    else if (m.t === 'answer') await Fi.answer();
+    else if (m.t === 'hangup') await Fi.hangUp();
+    else if (m.t === 'calls') out({ t: 'calls', items: (await Fi.getCalls({ limit: 50 })).items });
+    else if (m.t === 'sms') out({ t: 'sms', items: (await Fi.getSms({ limit: 300 })).items });
+    else if (m.t === 'sendsms') await Fi.sendSms({ to: String(m.to), body: String(m.body) });
+    else if (m.t === 'syncphotos') await syncPhotos();
+  } catch (e) { out({ t: 'error', msg: String(e.message || e) }); }
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${host}/phone?pin=${pin}`);
+  ws.onopen = () => $('status').textContent = 'Connected to ' + host;
+  ws.onmessage = e => run(JSON.parse(e.data));
+  ws.onclose = () => { if (stopped) return; $('status').textContent = 'Reconnecting...'; setTimeout(connect, 2000); };
+}
+
+$('go').onclick = async () => {
+  if (!Fi) { alert('This screen only works inside the fisync Android app.'); return; }
+  host = $('addr').value.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  pin = $('pin').value.trim();
+  if (!host || !pin) return;
+  localStorage.addr = host;
+  if (!host.includes(':')) host += ':8484';
+  await Fi.requestAll().catch(() => {});
+  Fi.addListener('call', e => out({ t: 'call', ...e }));
+  Fi.addListener('smsin', e => out({ t: 'smsin', ...e }));
+  stopped = false;
+  $('setup').hidden = true; $('live').hidden = false;
+  connect();
+};
+$('stop').onclick = () => { stopped = true; ws && ws.close(); $('live').hidden = true; $('setup').hidden = false; };
+</script>
+</body>
+</html>
