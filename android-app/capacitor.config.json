@@ -1,0 +1,6 @@
+{
+  "appId": "com.fisync.app",
+  "appName": "fisync",
+  "webDir": "www",
+  "server": { "androidScheme": "http", "cleartext": true, "allowNavigation": ["*"] }
+}

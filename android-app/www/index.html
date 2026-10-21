@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fisync</title>
+<style>
+:root{color-scheme:light dark}
+body{font:16px/1.5 system-ui,sans-serif;max-width:420px;margin:0 auto;padding:24px}
+h1{font-size:18px;margin:0 0 16px}
+input,button{font:inherit;width:100%;padding:12px;margin:8px 0;border:1px solid #8888;border-radius:4px;background:none;color:inherit;min-height:44px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.hint{opacity:.75;font-size:14px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<h1>fisync</h1>
+
+<section id="setup">
+  <p class="hint">Enter the PIN shown on your computer, then click Allow there. For USB, plug in the phone and choose "Connect a phone over USB" in the fisync menu on the computer.</p>
+  <input id="addr" placeholder="Computer address, e.g. 192.168.1.20" inputmode="decimal" autocomplete="off" aria-label="Computer address">
+  <input id="pin" placeholder="PIN" inputmode="numeric" maxlength="6" autocomplete="off" aria-label="PIN">
+  <input id="devname" placeholder="Name for this phone" value="Android phone" aria-label="Name for this phone">
+  <div class="row"><button id="go">Pair</button><button id="usb">Use USB</button></div>
+  <p id="msg" class="hint"></p>
+</section>
+
+<section id="live" hidden>
+  <p id="status"></p>
+  <p class="hint">Keep this screen open to share calls, messages and photos with the computer. For the trackpad, screen and files, open the computer's address in your browser.</p>
+  <div class="row"><button id="stop">Disconnect</button><button id="forget">Forget this computer</button></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const Fi = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.FiBridge;
+let host = localStorage.fisyncHost || '';
+let token = localStorage.fisyncToken || '';
+let ws = null, stopped = false, opened = false, fails = 0, listening = false;
+const show = s => { $('setup').hidden = s !== 'setup'; $('live').hidden = s !== 'live'; };
+const normHost = raw => {
+  const h = raw.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  return !h ? '' : h.includes(':') ? h : h + ':8484';
+};
+const out = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+
+function pairWs(h, pin, name) {
+  return new Promise((ok, no) => {
+    const s = new WebSocket(`ws://${h}/pair`);
+    const timer = setTimeout(() => { s.close(); no('No answer from your computer.'); }, 70000);
+    s.onopen = () => s.send(JSON.stringify({ t: 'pair', pin, name }));
+    s.onmessage = e => {
+      clearTimeout(timer);
+      const m = JSON.parse(e.data);
+      s.close();
+      m.t === 'paired' ? ok(m) : no(m.msg);
+    };
+    s.onerror = () => { clearTimeout(timer); no('Cannot reach the computer. Check Wi-Fi, or use USB.'); };
+  });
+}
+
+function startBridge() {
+  if (!Fi) { $('msg').textContent = 'Open this page inside the fisync Android app.'; return show('setup'); }
+  show('live');
+  stopped = false;
+  fails = 0;
+  if (!listening) {
+    Fi.addListener('call', e => out({ t: 'call', ...e }));
+    Fi.addListener('smsin', e => out({ t: 'smsin', ...e }));
+    listening = true;
+  }
+  connect();
+}
+
+function connect() {
+  opened = false;
+  ws = new WebSocket(`ws://${host}/bridge?token=${encodeURIComponent(token)}`);
+  $('status').textContent = 'Connecting to ' + host + '…';
+  ws.onopen = () => { opened = true; fails = 0; $('status').textContent = 'Connected to ' + host; };
+  ws.onmessage = e => run(JSON.parse(e.data));
+  ws.onclose = () => {
+    if (stopped) return;
+    if (!opened && ++fails === 3) $('status').textContent = 'Cannot reach your computer. Check Wi-Fi or USB. If it forgot this phone, tap Forget and pair again.';
+    else if (opened) $('status').textContent = 'Reconnecting…';
+    setTimeout(connect, 2000);
+  };
+}
+
+async function syncPhotos() {
+  const sent = JSON.parse(localStorage.fisyncSent || '[]');
+  const { items } = await Fi.listPhotos({ limit: 30 });
+  for (const p of items.filter(p => !sent.includes(p.id))) {
+    const { data } = await Fi.readPhoto({ id: p.id });
+    out({ t: 'photo', name: p.name, data });
+    sent.push(p.id);
+    localStorage.fisyncSent = JSON.stringify(sent.slice(-500));
+  }
+  out({ t: 'photosdone' });
+}
+
+async function run(m) {
+  try {
+    if (m.t === 'dial') await Fi.dial({ number: String(m.n) });
+    else if (m.t === 'answer') await Fi.answer();
+    else if (m.t === 'hangup') await Fi.hangUp();
+    else if (m.t === 'calls') out({ t: 'calls', items: (await Fi.getCalls({ limit: 50 })).items });
+    else if (m.t === 'sms') out({ t: 'sms', items: (await Fi.getSms({ limit: 300 })).items });
+    else if (m.t === 'sendsms') await Fi.sendSms({ to: String(m.to), body: String(m.body) });
+    else if (m.t === 'syncphotos') await syncPhotos();
+  } catch (e) { out({ t: 'error', msg: String(e.message || e) }); }
+}
+
+$('go').onclick = async () => {
+  const h = normHost($('addr').value), pin = $('pin').value.trim(), name = $('devname').value.trim() || 'Android phone';
+  if (!h || !pin) { $('msg').textContent = 'Enter the computer address and PIN.'; return; }
+  $('msg').textContent = 'Waiting for approval on your computer…';
+  try {
+    const m = await pairWs(h, pin, name);
+    host = h;
+    token = m.token;
+    localStorage.fisyncHost = h;
+    localStorage.fisyncToken = token;
+    $('msg').textContent = '';
+    if (Fi) await Fi.requestAll().catch(() => {});
+    startBridge();
+  } catch (e) {
+    $('msg').textContent = e;
+  }
+};
+
+$('usb').onclick = () => {
+  $('addr').value = 'localhost:8484';
+  $('msg').textContent = 'USB: plug in the phone, then choose "Connect a phone over USB" in the fisync menu on the computer.';
+};
+
+$('stop').onclick = () => { stopped = true; if (ws) ws.close(); show('setup'); $('msg').textContent = 'Disconnected.'; };
+$('forget').onclick = () => {
+  stopped = true;
+  if (ws) ws.close();
+  host = ''; token = '';
+  localStorage.removeItem('fisyncHost');
+  localStorage.removeItem('fisyncToken');
+  $('addr').value = ''; $('pin').value = '';
+  show('setup');
+  $('msg').textContent = 'Forgotten. Pair again to reconnect.';
+};
+
+$('addr').value = host;
+if (token && host) startBridge(); else show('setup');
+</script>
+</body>
+</html>
