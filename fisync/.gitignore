@@ -1,0 +1,5 @@
+node_modules/
+dist/
+android-app/node_modules/
+android-app/android/
+.DS_Store
