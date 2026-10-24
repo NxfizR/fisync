@@ -1,4 +1,15 @@
 import { utf8, text, concat, b64u, unb64u, random, sha, mac, kdf, ephemeral, ecdh, seal, open, same } from './crypto-core.js';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
+
+// SHA-256 of a whole file, read in pieces so large files do not need to fit in memory.
+async function fileSha256(file) {
+  const h = sha256.create();
+  for (let o = 0; o < file.size; o += 8 * 1024 * 1024) {
+    h.update(new Uint8Array(await file.slice(o, o + 8 * 1024 * 1024).arrayBuffer()));
+  }
+  return bytesToHex(h.digest());
+}
 
 const idOf = token => sha(concat(utf8('fisync/1 id'), utf8(token)));
 const keyOf = token => kdf(utf8(token), new Uint8Array(0), utf8('fisync/1 auth'), 32);
@@ -164,7 +175,16 @@ export function uploadFile(base, token, file, onProgress, conflict = 'keep') {
         else if (m.t === 'error') { c.close(); reject(new Error(m.msg)); }
       },
       onClose: r => reject(new Error(r || 'Connection closed')),
-    }).then(api => { c = api; api.sendJson({ t: 'put', name: file.name, size: file.size, conflict }); }, reject);
+    }).then(async api => {
+      c = api;
+      try {
+        const sha = await fileSha256(file);
+        api.sendJson({ t: 'put', name: file.name, size: file.size, conflict, sha256: sha });
+      } catch (e) {
+        api.close();
+        reject(e);
+      }
+    }, reject);
   });
 }
 

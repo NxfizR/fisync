@@ -30,3 +30,8 @@ ul{list-style:none;padding:0;margin:8px 0}
 li{display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}
 li a{color:inherit;overflow-wrap:anywhere}
 [hidden]{display:none!important}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:4px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90%}
+.toast.show{opacity:1}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0e0e10;--fg:#ececee;--mut:#a0a0a8;--line:#3a3a40}
+:root[data-theme="light"]{color-scheme:light;--bg:#fff;--fg:#111;--mut:#5f5f66;--line:#d4d4d8}
+@media (prefers-reduced-motion: reduce){.toast{transition:none}}
