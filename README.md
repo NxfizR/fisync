@@ -1,4 +1,4 @@
-# fisync
+# Fisync
 
 Control your computer from your phone, move files between your devices, and (on Android) use your computer for calls, text messages and photos, all over your local network or USB.
 
